@@ -3,7 +3,10 @@ import ssl
 
 
 class URL:
-    def __init__(self, url) -> None:
+    def __init__(self, url: str) -> None:
+        self._setUrl(url)
+
+    def _setUrl(self, url: str) -> None:
         self.scheme, url = url.split("://", 1)
         assert self.scheme in ["http", "https", "file"]
         if self.scheme == "http":
@@ -23,7 +26,17 @@ class URL:
             self.port = int(port)
         self.path = "/" + url
 
-    def _getHTTPResponse(self, headers={}):
+    def _updateUrl(self, url: str) -> None:
+        if len(url) > 0:
+            if url[0] == "/":
+                # New url does not contain host and scheme, so we reuse the
+                # existing values.
+                self.path = url
+            else:
+                # Use our standard url setter.
+                self._setUrl(url)
+
+    def _getHTTPResponse(self, headers={}, max_redirects=5) -> str:
         sock = socket.socket(
             family=socket.AF_INET,
             type=socket.SOCK_STREAM,
@@ -40,7 +53,8 @@ class URL:
         sock.send(request_string.encode("utf-8"))
         response = sock.makefile("r", encoding="utf-8", newline="\r\n")
         statusline = response.readline()
-        version, status, explanation = statusline.split(" ", 2)
+        version, status_string, explanation = statusline.split(" ", 2)
+        status = int(status_string)
         response_headers = {}
         while True:
             line = response.readline()
@@ -52,13 +66,19 @@ class URL:
         assert "transfer-encoding" not in response_headers
         assert "content-encoding" not in response_headers
 
+        # Handle potential redirect.
+        if 300 <= status and status < 400 and max_redirects > 0:
+            if "location" in response_headers:
+                sock.close()
+                self._updateUrl(response_headers["location"])
+                return self._getHTTPResponse(headers, max_redirects - 1)
+
         body = response.read()
         sock.close()
         return body
 
-    def _getFileResponse(self):
+    def _getFileResponse(self) -> str:
         with open(self.path, 'r') as file:
-            # Read the entire contents of the file into a string
             file_contents = file.read()
         return file_contents
 
