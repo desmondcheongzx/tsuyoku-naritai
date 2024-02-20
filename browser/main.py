@@ -1,5 +1,6 @@
 import socket
 import ssl
+import tkinter
 
 
 class URL:
@@ -88,26 +89,79 @@ class URL:
         return self._getFileResponse()
 
 
-def show(body: str) -> None:
+def lex(body: str) -> str:
     in_tag = False
+    text = ""
     for c in body:
         if c == "<":
             in_tag = True
         elif c == ">":
             in_tag = False
         elif not in_tag:
-            print(c, end="")
+            text += c
+    return text
 
 
-def load(url: URL) -> None:
-    body = url.request(headers={
-        "CONNECTION": "HTTP/1.1", "User-Agent": "SanityStudio/1.0"})
-    show(body)
+class Browser:
+    WIDTH, HEIGHT = 800, 600
+    HSTEP, VSTEP = 13, 18
+    SCROLL_STEP = 100
+
+    def __init__(self) -> None:
+        self.scroll = 0
+        self.window = tkinter.Tk()
+        self.canvas = tkinter.Canvas(
+            self.window,
+            width=self.WIDTH,
+            height=self.HEIGHT
+        )
+        self.canvas.pack()
+        self.window.bind("<Down>", self.scrolldown)
+        self.window.bind("<Up>", self.scrollup)
+
+    def scrolldown(self, e):
+        self.scroll += self.SCROLL_STEP
+        self.draw()
+
+    def scrollup(self, e):
+        self.scroll -= self.SCROLL_STEP
+        if self.scroll < 0:
+            self.scroll = 0
+        self.draw()
+
+    def layout(self, text: str):
+        display_list = []
+        cursor_x, cursor_y = self.HSTEP, self.VSTEP
+        for c in text:
+            display_list.append((cursor_x, cursor_y, c))
+            cursor_x += self.HSTEP
+            if cursor_x >= self.WIDTH - self.HSTEP:
+                cursor_x = self.HSTEP
+                cursor_y += self.VSTEP
+        return display_list
+
+    def draw(self):
+        self.canvas.delete("all")
+        for x, y, c in self.display_list:
+            # Don't render text outside the window.
+            if y > self.scroll + self.HEIGHT:
+                continue
+            if y + self.VSTEP < self.scroll:
+                continue
+            self.canvas.create_text(x, y - self.scroll, text=c)
+
+    def load(self, url: URL) -> None:
+        text = lex(url.request(headers={
+            "CONNECTION": "HTTP/1.1", "User-Agent": "SanityStudio/1.0"}))
+        self.display_list = self.layout(text)
+        self.draw()
 
 
 if __name__ == "__main__":
     import sys
     if len(sys.argv) < 2:
-        load(URL("file://Users/desmond.cheong/tsuyoku-naritai/browser/tmp"))
+        Browser().load(
+            URL("file://Users/desmond.cheong/tsuyoku-naritai/browser/tmp"))
     else:
-        load(URL(sys.argv[1]))
+        Browser().load(URL(sys.argv[1]))
+    tkinter.mainloop()
