@@ -10,12 +10,15 @@
 #include "../sse2neon/sse2neon.h"
 #endif
 
+#include <array>
+#include <bit>
 #include <bitset>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <limits>
 #include <string>
+#include <tuple>
 #include <type_traits>
 
 template <bool kUseChar = false>
@@ -48,6 +51,54 @@ void PrintIPAddress2(uint32_t address) {
   printf("%x.%x.%x.%x\n", (address & 0xFF), ((address >> 8) & 0xFF), ((address >> 16) & 0xFF),
          ((address >> 24) & 0xFF));
 }
+
+constexpr int kTwoTo16 = 65536;
+
+consteval std::tuple<std::array<int8_t, kTwoTo16>, std::array<std::array<int8_t, 16>, 82>>
+EvalMaskToId() {
+  std::array<int8_t, kTwoTo16> mapping;
+  std::array<std::array<int8_t, 16>, 82> patterns_builder;
+  int8_t cur_id = 0;
+  for (uint i = 0; i < kTwoTo16; ++i) {
+    bool bailed = false;
+    for (int x = 0; x < 16; ++x) patterns_builder[cur_id][x] = -1;
+    if (std::popcount(i) != 4) {
+      mapping[i] = -1;
+      bailed = true;
+      continue;
+    }
+    uint value = i;
+    int previous_dot = -1;
+    for (int count = 0; count < 4; ++count) {
+      unsigned int dot_pos = std::countr_zero(value);
+      unsigned int field_length = dot_pos - previous_dot - 1;
+      if (field_length > 3 || field_length < 1) {
+        mapping[i] = -1;
+        bailed = true;
+        break;
+      }
+      patterns_builder[cur_id][count] = previous_dot + 1;
+      if (field_length > 1) {
+        patterns_builder[cur_id][4 + count] = previous_dot + 2;
+        patterns_builder[cur_id][12 + count] = previous_dot + 2;
+      }
+      if (field_length == 3) {
+        patterns_builder[cur_id][8 + count] = previous_dot + 3;
+        patterns_builder[cur_id][12 + count] = previous_dot + 3;
+      }
+      previous_dot = dot_pos;
+      value -= 1 << dot_pos;
+    }
+    if (!bailed) {
+      mapping[i] = cur_id++;
+    }
+  }
+  return std::make_tuple(mapping, patterns_builder);
+}
+
+constexpr auto _kMaskEval = EvalMaskToId();
+constexpr std::array<int8_t, kTwoTo16> kMaskToId = std::get<0>(_kMaskEval);
+constexpr std::array<std::array<int8_t, 16>, 82> patterns = std::get<1>(_kMaskEval);
 
 template <bool kDebug>
 void Parse(std::string address) {
