@@ -21,11 +21,12 @@
 #include <tuple>
 #include <type_traits>
 
-template <bool kUseChar = false>
+template <bool kUseChar = false, typename kType = int8_t>
 void PrintXMM(const __m128i value) {
-  alignas(16) int8_t v[16];
+  size_t kSize = sizeof(value) / sizeof(kType);
+  alignas(16) kType v[kSize];
   _mm_store_si128(reinterpret_cast<__m128i*>(v), value);
-  for (int i = 0; i < sizeof(value); ++i) {
+  for (int i = 0; i < kSize; ++i) {
     if constexpr (kUseChar) {
       std::cout << v[i] << " ";
     } else {
@@ -52,16 +53,19 @@ void PrintIPAddress2(uint32_t address) {
          ((address >> 24) & 0xFF));
 }
 
-constexpr int kTwoTo16 = 65536;
+constexpr int kMaxUInt16 = std::numeric_limits<uint16_t>::max();
+constexpr int kMaxIPLength = 16;
+constexpr int kMaxDotmasks = 81;
 
-consteval std::tuple<std::array<int8_t, kTwoTo16>, std::array<std::array<int8_t, 16>, 82>>
+consteval std::tuple<std::array<int8_t, kMaxUInt16>,
+                     std::array<std::array<int8_t, kMaxIPLength>, kMaxDotmasks + 1>>
 EvalMaskToId() {
-  std::array<int8_t, kTwoTo16> mapping;
-  std::array<std::array<int8_t, 16>, 82> patterns_builder;
+  std::array<int8_t, kMaxUInt16> mapping;
+  std::array<std::array<int8_t, kMaxIPLength>, kMaxDotmasks + 1> patterns_builder;
   int8_t cur_id = 0;
-  for (uint i = 0; i < kTwoTo16; ++i) {
+  for (uint i = 0; i < kMaxUInt16; ++i) {
     bool bailed = false;
-    for (int x = 0; x < 16; ++x) patterns_builder[cur_id][x] = -1;
+    for (int x = 0; x < kMaxIPLength; ++x) patterns_builder[cur_id][x] = -1;
     if (std::popcount(i) != 4) {
       mapping[i] = -1;
       bailed = true;
@@ -69,22 +73,27 @@ EvalMaskToId() {
     }
     uint value = i;
     int previous_dot = -1;
-    for (int count = 0; count < 4; ++count) {
+    for (int count = 0; count < 4 && !bailed; ++count) {
       unsigned int dot_pos = std::countr_zero(value);
       unsigned int field_length = dot_pos - previous_dot - 1;
-      if (field_length > 3 || field_length < 1) {
-        mapping[i] = -1;
-        bailed = true;
-        break;
-      }
-      patterns_builder[cur_id][count] = previous_dot + 1;
-      if (field_length > 1) {
-        patterns_builder[cur_id][4 + count] = previous_dot + 2;
-        patterns_builder[cur_id][12 + count] = previous_dot + 2;
-      }
-      if (field_length == 3) {
-        patterns_builder[cur_id][8 + count] = previous_dot + 3;
-        patterns_builder[cur_id][12 + count] = previous_dot + 3;
+      switch (field_length) {
+        case 1:
+          patterns_builder[cur_id][count * 2] = previous_dot + 1;
+          break;
+        case 2:
+          patterns_builder[cur_id][count * 2] = previous_dot + 2;
+          patterns_builder[cur_id][count * 2 + 1] = previous_dot + 1;
+          patterns_builder[cur_id][12 + count] = previous_dot + 1;
+          break;
+        case 3:
+          patterns_builder[cur_id][count * 2] = previous_dot + 3;
+          patterns_builder[cur_id][count * 2 + 1] = previous_dot + 2;
+          patterns_builder[cur_id][8 + count * 2] = previous_dot + 1;
+          patterns_builder[cur_id][8 + count * 2 + 1] = previous_dot + 1;
+          break;
+        default:
+          mapping[i] = -1;
+          bailed = true;
       }
       previous_dot = dot_pos;
       value -= 1 << dot_pos;
@@ -97,75 +106,40 @@ EvalMaskToId() {
 }
 
 constexpr auto _kMaskEval = EvalMaskToId();
-constexpr std::array<int8_t, kTwoTo16> kMaskToId = std::get<0>(_kMaskEval);
-constexpr std::array<std::array<int8_t, 16>, 82> patterns = std::get<1>(_kMaskEval);
+constexpr std::array<int8_t, kMaxUInt16> kMaskToId = std::get<0>(_kMaskEval);
+constexpr std::array<std::array<int8_t, kMaxIPLength>, kMaxDotmasks + 1> kPatterns =
+    std::get<1>(_kMaskEval);
 
 template <bool kDebug>
 void Parse(std::string address) {
   const __m128i input = _mm_loadu_si128(reinterpret_cast<const __m128i*>(address.data()));
   PrintXMM</*kUseChar=*/true>(input);
 
-  const __m128i dots = _mm_set1_epi8('.');
-  __m128i his_t0 = _mm_cmpeq_epi8(input, dots);
-  uint16_t dotmask = _mm_movemask_epi8((_mm_cmpeq_epi8(input, dots)));
-  PrintBinary(dotmask);
-
-  const uint16_t mask = ~(0xffff << address.size());
-  dotmask &= mask;
-  PrintBinary(dotmask);
-
-  const __m128i less_than_0 = _mm_set1_epi8('0' + std::numeric_limits<int8_t>::min());
-  const __m128i greater_than_9 =
-      _mm_set1_epi8('9' - '0' + 1 + (std::numeric_limits<int8_t>::min()));
-
-  // Force ASCII values less than '0' to underflow.
-  const __m128i t0 = _mm_sub_epi8(input, less_than_0);
-  // Get the non-underflowed values that are less than '9'.
-  const __m128i t1 = _mm_cmplt_epi8(t0, greater_than_9);
-  // Check that every character is either a valid numerical value or a dot.
-  uint16_t in_range = _mm_movemask_epi8(t1) & mask;
-  uint16_t valid_positions = in_range | dotmask;
-  if (valid_positions != mask) {
-    std::cout << "Invalid IP address!" << std::endl;
+  uint16_t dotmask;
+  {
+    const __m128i dots = _mm_set1_epi8('.');
+    dotmask = _mm_movemask_epi8((_mm_cmpeq_epi8(input, dots)));
+    const uint16_t end_pos = 1 << address.size();
+    dotmask = (dotmask & (end_pos - 1)) + end_pos;
+  }
+  const int maskId = kMaskToId[dotmask];
+  if (maskId < 0) {
+    std::cout << "Error: Invalid IP Address." << std::endl;
     return;
   }
+  const __m128i pattern =
+      _mm_loadu_si128(reinterpret_cast<const __m128i*>(kPatterns[maskId].data()));
 
-  const auto num_dots = __builtin_popcount(dotmask);
+  const __m128i ascii0 = _mm_set1_epi8('0');
+  const __m128i shuffled_input = _mm_shuffle_epi8(input, pattern);
+  const __m128i normalized_input = _mm_subs_epu8(shuffled_input, ascii0);
 
-  if (num_dots != 3) {
-    std::cout << ((num_dots > 3) ? "Invalid IP address: too many fields!"
-                                 : "Invalid IP address: too few fields!")
-              << std::endl;
-    return;
-  }
-
-  std::cout << "special cases" << std::endl;
-
-  // Mixed 1-byte, 2-byte case XX.X.XX.X.
-  // Rearrange 12.3.45.6 into a 128-bit register storing '6''5''3''2''0''4''0''1'.
-  const __m128i pattern = _mm_setr_epi8(0, -1, 5, -1, 1, 3, 6, 8, -1, -1, -1, -1, -1, -1, -1, -1);
-  const __m128i shufed = _mm_shuffle_epi8(input, pattern);
-  PrintXMM</*kUseChar=*/false>(shufed);
-  // Take the lower 64-bits and convert ascii numericals into integers.
-  const uint64_t ascii = _mm_cvtsi128_si64(shufed);
-  const uint64_t w01 = ascii & 0x0f0f0f0f0f0f0f0f;
-  // Combine the lower and higher bits by multiplying the lower bits by 10.
-  const uint32_t w0 = w01 >> 32;
-  const uint32_t w1 = w01 & 0xffffffff;
-  PrintIPAddress(10 * w1 + w0);
-
-  return;
-  // Special 1-byte fields case.
-  // 1.1.1.1
-  // '1''1''1''1' & 0x0F0F0F0F
-  // 1111
-  // const __m128i pattern =
-  //   _mm_setr_epi8(0, 2, 4, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
-  // const __m128i his_t1 = _mm_shuffle_epi8(input, pattern);
-  // PrintXMM(input);
-  // PrintIPAddress2(_mm_cvtsi128_si32(his_t1) & 0x0f0f0f0f);
-  // PrintIPAddress2(_mm_cvtsi128_si32(his_t1));
-  // PrintXMM(his_t1);
+  const __m128i weights = _mm_setr_epi8(1, 10, 1, 10, 1, 10, 1, 10, 100, 0, 100, 0, 100, 0, 100, 0);
+  const __m128i multiplied_input = _mm_maddubs_epi16(normalized_input, weights);
+  const __m128i t5 = _mm_alignr_epi8(multiplied_input, multiplied_input, 8);
+  const __m128i t6 = _mm_add_epi16(multiplied_input, t5);
+  const __m128i output = _mm_packus_epi16(t6, t6);
+  PrintIPAddress(_mm_cvtsi128_si32(output));
 }
 
 int main(int argc, char* argv[]) {
