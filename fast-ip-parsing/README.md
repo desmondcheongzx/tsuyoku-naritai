@@ -118,14 +118,14 @@ Both Jeroen and Daniel summarise the algorithm pretty well in their blog posts. 
 The algorithm described above is reproduced in `parser.cc`. You can run the code as follows:
 
 ```
-; clang++ parser.cc -std=c++20 -O3 -march=native -o parser
+; clang++ parser.cc -std=c++20 -O3 -march=native  -fconstexpr-steps=65536000 -o parser
 ; ./parser
 <ip-address>
 <ip-address>
 ...
 ```
 
-You can also pass in a `--debug` flag to enable debugging output.
+You can also pass in a `-D_DEBUG` flag _to clang_ enable debugging output.
 
 ## Benchmarking
 

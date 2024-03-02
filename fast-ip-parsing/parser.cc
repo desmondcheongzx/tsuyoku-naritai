@@ -110,10 +110,11 @@ constexpr std::array<int8_t, kMaxUInt16> kMaskToId = std::get<0>(_kMaskEval);
 constexpr std::array<std::array<int8_t, kMaxIPLength>, kMaxDotmasks + 1> kPatterns =
     std::get<1>(_kMaskEval);
 
-template <bool kDebug>
 void Parse(std::string address) {
   const __m128i input = _mm_loadu_si128(reinterpret_cast<const __m128i*>(address.data()));
+#ifdef _DEBUG
   PrintXMM</*kUseChar=*/true>(input);
+#endif
 
   uint16_t dotmask;
   {
@@ -143,14 +144,9 @@ void Parse(std::string address) {
 }
 
 int main(int argc, char* argv[]) {
-  for (int i = 0; i < argc; ++i) {
-    if (!strcmp(argv[i], "--debug")) {
-      std::cout << "whee" << std::endl;
-    }
-  }
   std::string address;
   while (std::cin >> address) {
-    Parse</*kDebug=*/false>(address);
+    Parse(address);
   }
   return 0;
 }
